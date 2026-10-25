@@ -1,0 +1,54 @@
+{
+  "dataset_dir": "c:\\Users\\Piyush\\OneDrive\\Desktop\\ubipr2\\both_eyes",
+  "total_files": 11020,
+  "ignored_files_count": 2,
+  "ignored_files_samples": [
+    ".DS_Store",
+    "._.DS_Store"
+  ],
+  "jpg_images_count": 5509,
+  "png_masks_count": 5509,
+  "unpaired_images_count": 0,
+  "unpaired_masks_count": 0,
+  "unparseable_files_count": 0,
+  "valid_samples_count": 5509,
+  "unique_subjects_count": 261,
+  "session_distribution": {
+    "1": 3914,
+    "2": 1595
+  },
+  "images_per_subject": {
+    "min": 14,
+    "max": 33,
+    "mean": 21.11,
+    "median": 15
+  },
+  "unreadable_images_count": 0,
+  "channels_found": [
+    3
+  ],
+  "dtypes_found": [
+    "uint8"
+  ],
+  "mask_classes_found": [
+    0,
+    85,
+    170,
+    255
+  ],
+  "mask_class_semantics": {
+    "0": "Background / Skin",
+    "85": "Iris (Both Eyes)",
+    "170": "Sclera",
+    "255": "Eyebrows"
+  },
+  "resolutions_sample_count": 200,
+  "min_resolution": [
+    1067,
+    368
+  ],
+  "max_resolution": [
+    2781,
+    959
+  ]
+}

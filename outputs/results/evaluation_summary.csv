@@ -1,0 +1,13 @@
+Method,EnrollmentSize,Rank1Accuracy,Rank5Accuracy,ExtractionLatencyMs,MatchingLatencyMs,TotalProbes
+gabor_hamming,1,0.2753,0.5699,27.75,29.75,465
+lbp_knn,1,0.3785,0.7355,9.87,0.15,465
+gabor_svm,1,0.2882,0.5935,18.89,0.53,465
+gabor_hamming,3,0.2843,0.5373,28.25,82.88,415
+lbp_knn,3,0.388,0.7639,10.45,0.3,415
+gabor_svm,3,0.3639,0.6602,47.26,1.39,415
+gabor_hamming,5,0.3096,0.5808,17.66,276.07,365
+lbp_knn,5,0.3699,0.726,35.64,0.74,365
+gabor_svm,5,0.3945,0.6795,20.73,0.55,365
+gabor_hamming,10,0.3042,0.5333,20.92,296.34,240
+lbp_knn,10,0.4375,0.7417,45.19,4.57,240
+gabor_svm,10,0.4667,0.7333,102.66,2.06,240

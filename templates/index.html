@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>UBIPr Dual-Eye Iris Biometric Recognition</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+  <header class="app-header">
+    <div class="header-container">
+      <div class="logo-group">
+        <div class="eye-icon">👁️</div>
+        <div>
+          <h1>UBIPr Dual-Eye Iris Recognition</h1>
+          <p class="subtitle">Multi-Method Visible Wavelength Biometric Research Prototype</p>
+        </div>
+      </div>
+      <div class="status-badge" id="systemStatusBadge">
+        <span class="status-dot"></span>
+        <span id="systemStatusText">Checking Service...</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="main-container">
+    <!-- Dataset Summary Ribbon -->
+    <section class="card summary-ribbon">
+      <div class="summary-item">
+        <span class="summary-label">Dataset</span>
+        <span class="summary-val">UBIPR Both-Eyes</span>
+      </div>
+      <div class="summary-item">
+        <span class="summary-label">Inventoried Images</span>
+        <span class="summary-val" id="statImages">5,509</span>
+      </div>
+      <div class="summary-item">
+        <span class="summary-label">Total Subjects</span>
+        <span class="summary-val" id="statSubjects">261</span>
+      </div>
+      <div class="summary-item">
+        <span class="summary-label">Enrolled Gallery</span>
+        <span class="summary-val" id="statEnrolled">25 Subjects</span>
+      </div>
+      <div class="summary-item">
+        <span class="summary-label">Sessions</span>
+        <span class="summary-val">S1 (3,914) & S2 (1,595)</span>
+      </div>
+      <div class="summary-item">
+        <span class="summary-label">Mask Classes</span>
+        <span class="summary-val">Skin (0), Iris (85), Sclera (170), Brows (255)</span>
+      </div>
+    </section>
+
+    <!-- Biometric Scanner Workspace -->
+    <div class="workspace-grid">
+      <!-- Left Column: Controls & Upload -->
+      <section class="card scanner-controls-card">
+        <h2>Biometric Scanner</h2>
+        <p class="section-desc">Upload a periocular dual-eye image for 1:N identification or 1:1 verification.</p>
+
+        <form id="scannerForm" class="scanner-form">
+          <!-- Mode Selection -->
+          <div class="form-group">
+            <label class="control-label">Operation Mode</label>
+            <div class="segmented-control">
+              <label class="segment-btn">
+                <input type="radio" name="operationMode" value="identify" checked id="modeIdentify">
+                <span>1:N Identification</span>
+              </label>
+              <label class="segment-btn">
+                <input type="radio" name="operationMode" value="verify" id="modeVerify">
+                <span>1:1 Verification</span>
+              </label>
+            </div>
+          </div>
+
+          <!-- Method Selector -->
+          <div class="form-group">
+            <label class="control-label" for="methodSelect">Biometric Method</label>
+            <select id="methodSelect" class="form-select">
+              <option value="all">All Methods (Side-by-Side Comparison)</option>
+              <option value="gabor_hamming">Gabor Filter Bank + Hamming Distance</option>
+              <option value="lbp_knn">LBP Spatial Histograms + KNN</option>
+              <option value="gabor_svm">Gabor Energy Descriptors + Linear SVM</option>
+            </select>
+          </div>
+
+          <!-- Claimed Subject ID (Visible only in Verification mode) -->
+          <div class="form-group" id="claimedSubjectGroup" style="display: none;">
+            <label class="control-label" for="claimedSubjectInput">Claimed Subject ID</label>
+            <input type="text" id="claimedSubjectInput" class="form-input" placeholder="e.g. C101" list="enrolledSubjectsList">
+            <datalist id="enrolledSubjectsList"></datalist>
+            <span class="field-help">Target subject identity to verify against.</span>
+          </div>
+
+          <!-- Image Upload Area -->
+          <div class="form-group">
+            <label class="control-label">Probe Image (*.jpg, *.png)</label>
+            <div class="drop-zone" id="imageDropZone">
+              <input type="file" id="imageFileInput" accept="image/*" class="file-input-hidden">
+              <div class="drop-prompt" id="dropPrompt">
+                <span class="upload-icon">📁</span>
+                <p><strong>Click to browse</strong> or drag & drop image</p>
+                <span class="upload-sub">Supports visible light both-eyes images</span>
+              </div>
+              <img id="imagePreview" class="image-preview" alt="Probe Preview" style="display: none;">
+            </div>
+          </div>
+
+          <!-- Optional Mask Upload -->
+          <div class="form-group">
+            <label class="control-label">Segmentation Mask <span class="badge-optional">Optional</span></label>
+            <input type="file" id="maskFileInput" accept="image/*" class="form-file">
+            <span class="field-help">If omitted, automated ocular segmentation is used.</span>
+          </div>
+
+          <!-- Submit Button -->
+          <button type="submit" id="submitBtn" class="btn btn-primary" disabled>
+            <span class="btn-text">Execute Biometric Scan</span>
+            <span class="spinner" id="btnSpinner" style="display: none;"></span>
+          </button>
+        </form>
+
+        <div id="errorAlert" class="alert alert-error" style="display: none;"></div>
+      </section>
+
+      <!-- Right Column: Results Panel -->
+      <section class="card results-card" id="resultsPanel">
+        <h2>Biometric Scan Results</h2>
+        <div id="resultsPlaceholder" class="placeholder-state">
+          <span class="placeholder-icon">👁️</span>
+          <p>Select or drag an eye image and execute a scan to see real-time biometric analysis.</p>
+        </div>
+
+        <div id="resultsContent" style="display: none;">
+          <!-- Quality & Segmentation Status Ribbons -->
+          <div class="meta-badges-row">
+            <div class="meta-badge" id="badgeQuality">
+              <span class="meta-badge-title">Image Quality:</span>
+              <span id="valQualityText">Valid</span>
+            </div>
+            <div class="meta-badge" id="badgeSegmentation">
+              <span class="meta-badge-title">Segmentation:</span>
+              <span id="valSegText">2 Eyes Detected</span>
+            </div>
+            <div class="meta-badge">
+              <span class="meta-badge-title">Gallery Size:</span>
+              <span id="valGalleryText">25 Subjects</span>
+            </div>
+          </div>
+
+          <!-- 1:1 Verification Result Card -->
+          <div id="verificationResultCard" class="verification-box" style="display: none;">
+            <div class="ver-decision-header" id="verDecisionHeader">
+              <span class="ver-decision-icon" id="verDecisionIcon">✅</span>
+              <div>
+                <h3 id="verDecisionTitle">IDENTITY VERIFIED</h3>
+                <p id="verDecisionSub">Claimed identity matched successfully.</p>
+              </div>
+            </div>
+            <div class="ver-metrics-grid">
+              <div class="ver-metric">
+                <span class="label">Claimed Subject:</span>
+                <span class="value" id="verClaimedSubj">-</span>
+              </div>
+              <div class="ver-metric">
+                <span class="label">Raw Score:</span>
+                <span class="value" id="verRawScore">-</span>
+              </div>
+              <div class="ver-metric">
+                <span class="label">Operating Threshold:</span>
+                <span class="value" id="verThreshold">-</span>
+              </div>
+              <div class="ver-metric">
+                <span class="label">Normalized Similarity:</span>
+                <span class="value" id="verSimilarity">-</span>
+              </div>
+            </div>
+            <p class="score-direction-note" id="verDirectionNote"></p>
+          </div>
+
+          <!-- 1:N Identification Results Container -->
+          <div id="identificationResultsContainer"></div>
+
+          <!-- Educational Disclaimer Note -->
+          <div class="info-callout">
+            <strong>Metric Distinction Note:</strong>
+            Per-scan <em>Normalized Similarity</em> reflects candidate alignment for this individual query. It is distinct from dataset-level validation metrics (such as Rank-1 accuracy, FAR, and FRR) measured across cross-session test splits.
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- Evaluation Benchmarks & Figures -->
+    <section class="card benchmark-section">
+      <div class="benchmark-header">
+        <h2>Empirical Benchmark Evaluation</h2>
+        <span class="badge-protocol">Leakage-Safe Protocol | S1 Gallery vs S2 Probes</span>
+      </div>
+
+      <div class="charts-grid">
+        <div class="chart-card">
+          <h3>Rank-1 Identification vs. Enrollment Size</h3>
+          <img src="/static/charts/identification_accuracy.png" alt="Identification Accuracy Chart" class="chart-img" onerror="this.src=''">
+          <p class="chart-caption">Comparison across gallery sizes 1, 3, 5, and 10.</p>
+        </div>
+
+        <div class="chart-card">
+          <h3>1:1 Verification ROC Curves</h3>
+          <img src="/static/charts/verification_roc.png" alt="Verification ROC Chart" class="chart-img" onerror="this.src=''">
+          <p class="chart-caption">False Accept Rate (FAR) vs False Reject Rate (FRR) curves with EER.</p>
+        </div>
+
+        <div class="chart-card">
+          <h3>Computational Latency Breakdown</h3>
+          <img src="/static/charts/latency_comparison.png" alt="Latency Comparison Chart" class="chart-img" onerror="this.src=''">
+          <p class="chart-caption">Feature extraction time vs 1:N match duration per candidate.</p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="app-footer">
+    <p>UBIPR Both-Eyes Iris Recognition Biometric Prototype &bull; Designed for Android & Spring Boot Extension</p>
+  </footer>
+
+  <script src="/static/js/main.js"></script>
+</body>
+</html>
