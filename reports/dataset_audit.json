@@ -1,5 +1,5 @@
 {
-  "dataset_dir": "c:\\Users\\Piyush\\OneDrive\\Desktop\\ubipr2\\both_eyes",
+  "dataset_dir": "data/ubipr2/both_eyes",
   "total_files": 11020,
   "ignored_files_count": 2,
   "ignored_files_samples": [

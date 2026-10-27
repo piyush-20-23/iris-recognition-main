@@ -22,6 +22,7 @@ app = Flask(
     template_folder="templates",
     static_folder="static"
 )
+app.config["TEMPLATES_AUTO_RELOAD"] = True
 app.config["MAX_CONTENT_LENGTH"] = config.MAX_CONTENT_LENGTH
 app.config["SECRET_KEY"] = config.SECRET_KEY
 
@@ -98,19 +99,50 @@ def index():
 
 # --- REST API v1 Routes ---
 
+@app.route("/health", methods=["GET"])
 @app.route("/api/v1/health", methods=["GET"])
 def health():
     return jsonify({
         "status": "healthy",
         "service": "ubipr-iris-recognition-api",
-        "version": "1.0.0",
+        "version": "1.1.0",
         "timestamp": time.time(),
         "dataset_dir": str(config.DATASET_DIR),
         "is_gallery_enrolled": recognition_service.is_enrolled,
         "enrolled_subjects_count": len(recognition_service.enrolled_subjects),
-        "enrolled_subjects": recognition_service.enrolled_subjects[:15],
+        "enrolled_subjects": recognition_service.enrolled_subjects,
         "available_methods": list(recognition_service.methods.keys())
     })
+
+
+@app.route("/api/v1/samples", methods=["GET"])
+def list_samples():
+    """Returns quick-testing sample probe images from enrolled subjects across the ID spectrum."""
+    samples = []
+    if config.DATASET_DIR.exists():
+        # Pick sample images across various tiers: low (C1, C3), mid (C51, C99), high (C101, C201, C301, C401)
+        target_subjs = ["C1", "C3", "C51", "C99", "C101", "C201", "C301", "C401"]
+        for subj in target_subjs:
+            if subj in recognition_service.enrolled_subjects:
+                found = sorted(list(config.DATASET_DIR.glob(f"{subj}_*.jpg")))
+                if found:
+                    samples.append({
+                        "subject_id": subj,
+                        "filename": found[0].name,
+                        "url": f"/api/v1/sample/{found[0].name}"
+                    })
+    return jsonify({"status": "success", "samples": samples})
+
+
+@app.route("/api/v1/sample/<filename>", methods=["GET"])
+def get_sample(filename):
+    """Serves a sample image file from the dataset for quick browser testing."""
+    safe_filename = Path(filename).name
+    if config.DATASET_DIR.exists():
+        target = config.DATASET_DIR / safe_filename
+        if target.exists() and target.is_file():
+            return send_from_directory(config.DATASET_DIR, safe_filename)
+    return jsonify({"status": "error", "message": "Sample image not found"}), 404
 
 
 @app.route("/api/v1/dataset/summary", methods=["GET"])
@@ -146,9 +178,31 @@ def latest_results():
     }), 404
 
 
+def _ensure_gallery_enrolled() -> bool:
+    if recognition_service.is_enrolled:
+        return True
+    if config.DATASET_DIR.exists() and any(config.DATASET_DIR.glob("*.jpg")):
+        try:
+            logger.info("Auto-enrolling gallery on first request...")
+            recognition_service.initialize_and_enroll(enrollment_size=3, max_subjects=50)
+            return recognition_service.is_enrolled
+        except Exception as e:
+            logger.error(f"Failed to auto-enroll gallery: {e}")
+            return False
+    return False
+
+
 @app.route("/api/v1/identify", methods=["POST"])
 def identify():
     req_id = getattr(request, "request_id", str(uuid.uuid4()))
+
+    if not _ensure_gallery_enrolled():
+        return jsonify({
+            "status": "error",
+            "request_id": req_id,
+            "error_type": "GalleryNotEnrolled",
+            "message": "Gallery has not been enrolled. The UBIPr dataset is required to enroll gallery subjects for matching. Please configure the dataset path or download the dataset."
+        }), 503
 
     if "image" not in request.files:
         return jsonify({
@@ -178,6 +232,17 @@ def identify():
         m_file = request.files["mask"]
         if m_file and m_file.filename != "":
             mask_bytes = m_file.read()
+
+    # Auto-resolve mask from dataset if not explicitly uploaded
+    if mask_bytes is None and image_file.filename:
+        stem = Path(image_file.filename).stem
+        gt_mask_path = config.DATASET_DIR / f"{stem}.png"
+        if gt_mask_path.exists():
+            try:
+                mask_bytes = gt_mask_path.read_bytes()
+                logger.info(f"Auto-resolved ground-truth segmentation mask for '{image_file.filename}'.")
+            except Exception as e:
+                logger.warning(f"Could not read auto-resolved mask: {e}")
 
     method_name = request.form.get("method", "all").strip().lower()
     top_k_str = request.form.get("top_k", "5")
@@ -216,6 +281,14 @@ def identify():
 def verify():
     req_id = getattr(request, "request_id", str(uuid.uuid4()))
 
+    if not _ensure_gallery_enrolled():
+        return jsonify({
+            "status": "error",
+            "request_id": req_id,
+            "error_type": "GalleryNotEnrolled",
+            "message": "Gallery has not been enrolled. The UBIPr dataset is required to verify subjects. Please configure the dataset path or download the dataset."
+        }), 503
+
     if "image" not in request.files:
         return jsonify({
             "status": "error",
@@ -253,7 +326,18 @@ def verify():
         if m_file and m_file.filename != "":
             mask_bytes = m_file.read()
 
-    method_name = request.form.get("method", "gabor_hamming").strip().lower()
+    # Auto-resolve mask from dataset if not explicitly uploaded
+    if mask_bytes is None and image_file.filename:
+        stem = Path(image_file.filename).stem
+        gt_mask_path = config.DATASET_DIR / f"{stem}.png"
+        if gt_mask_path.exists():
+            try:
+                mask_bytes = gt_mask_path.read_bytes()
+                logger.info(f"Auto-resolved ground-truth segmentation mask for '{image_file.filename}'.")
+            except Exception as e:
+                logger.warning(f"Could not read auto-resolved mask: {e}")
+
+    method_name = request.form.get("method", "ensemble_fusion").strip().lower()
 
     try:
         result = recognition_service.verify(
@@ -283,7 +367,18 @@ def verify():
 
 
 if __name__ == "__main__":
-    logger.info("Pre-warming recognition service gallery models...")
-    recognition_service.initialize_and_enroll(enrollment_size=3, max_subjects=25)
+    if config.DATASET_DIR.exists():
+        logger.info(f"Pre-warming recognition service gallery models from '{config.DATASET_DIR}'...")
+        try:
+            recognition_service.initialize_and_enroll(enrollment_size=3, max_subjects=None)
+            logger.info(f"Gallery pre-warming completed successfully ({len(recognition_service.enrolled_subjects)} subjects).")
+        except Exception as e:
+            logger.warning(f"Could not pre-warm gallery: {e}. Starting server with un-enrolled gallery.")
+    else:
+        logger.warning(
+            f"Dataset directory not found at '{config.DATASET_DIR}'. "
+            "Server starting in dashboard mode without enrolled gallery. "
+            "Download the UBIPr both_eyes dataset to enable live 1:N identification and 1:1 verification."
+        )
     logger.info(f"Starting Flask server on http://{config.FLASK_HOST}:{config.FLASK_PORT}...")
     app.run(host=config.FLASK_HOST, port=config.FLASK_PORT, debug=False)

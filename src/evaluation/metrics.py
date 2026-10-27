@@ -53,7 +53,7 @@ def compute_roc_and_eer(
     """
     Computes FAR/FRR curve across threshold sweep and determines Equal Error Rate (EER).
     """
-    from typing import Any
+
     all_scores = np.concatenate([genuine_scores, impostor_scores])
     if len(all_scores) == 0:
         return {"eer": 0.0, "eer_threshold": 0.0, "thresholds": [], "far": [], "frr": []}

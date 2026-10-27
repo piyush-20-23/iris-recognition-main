@@ -1,0 +1,54 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyd
+
+# C extensions
+*.so
+
+# Virtual Environments
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Testing & Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# Biometric Dataset & Large Files (download separately or configure via IRIS_DATASET_DIR)
+data/*
+!data/.gitkeep
+
+# Runtime Caches & Model Artifacts
+artifacts/models/*.pkl
+artifacts/templates/*
+*.pkl
+
+# Antigravity & Agent workspace artifacts
+.agents/
+skills-lock.json
+
+# IDEs & Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.directory
+
+# Operating System Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini

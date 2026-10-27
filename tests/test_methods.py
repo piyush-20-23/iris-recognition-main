@@ -3,6 +3,7 @@ import pytest
 from src.methods.gabor_hamming import GaborHammingMethod
 from src.methods.lbp_knn import LbpKnnMethod
 from src.methods.gabor_svm import GaborSvmMethod
+from src.methods.ensemble_fusion import EnsembleFusionMethod
 from src.preprocessing.normalization import NormalizedIris
 
 
@@ -73,3 +74,20 @@ def test_gabor_svm_lifecycle(dummy_normalized_iris):
     assert ranked[0]["higher_is_better"] is True
     # Highest decision score should be first
     assert ranked[0]["raw_score"] >= ranked[1]["raw_score"]
+
+
+def test_ensemble_fusion_lifecycle(dummy_normalized_iris):
+    method = EnsembleFusionMethod()
+    f1 = method.extract_features(dummy_normalized_iris)
+    f2 = method.extract_features(dummy_normalized_iris)
+
+    features = [f1, f1, f2, f2]
+    labels = ["C1", "C1", "C2", "C2"]
+    method.fit(features, labels)
+    assert method.is_fitted
+
+    ranked = method.predict_ranked(f1, top_k=2)
+    assert len(ranked) == 2
+    assert ranked[0]["rank"] == 1
+    assert ranked[0]["subject_id"] == "C1"
+    assert ranked[0]["higher_is_better"] is True

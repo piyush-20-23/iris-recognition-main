@@ -61,7 +61,7 @@ The system implements three distinct biometric recognition algorithms, strict le
 
 ## 2. Dataset Audit & Ground Truth Semantics
 
-The prototype was audited against the local dataset located at `c:\Users\Piyush\OneDrive\Desktop\ubipr2\both_eyes`:
+The prototype was audited against the UBIPr both-eyes dataset (`data/ubipr2/both_eyes`):
 
 - **Total Files Inventoried:** 11,020 items.
 - **Operating Images:** 5,509 `.jpg` images (3-channel BGR, variable periocular resolutions).
@@ -171,7 +171,7 @@ Returns the latest benchmark evaluation metrics and paths to generated charts.
 Example cURL:
 ```powershell
 curl.exe -X POST "http://127.0.0.1:5000/api/v1/identify" `
-  -F "image=@C:\Users\Piyush\OneDrive\Desktop\ubipr2\both_eyes\C101_S1_I1.jpg" `
+  -F "image=@data/ubipr2/both_eyes/C101_S1_I1.jpg" `
   -F "method=all" `
   -F "top_k=3"
 ```
@@ -218,31 +218,51 @@ The system is deliberately designed for seamless multi-tier expansion:
 
 ---
 
-## 7. Quickstart & Verification (Windows PowerShell)
+## 7. Quickstart & Cross-Platform Setup
 
-### Step 1: Activate Virtual Environment
+### Step 1: Clone Repository & Create Virtual Environment
+
+**Linux / macOS:**
+```bash
+git clone https://github.com/your-username/iris-recognition.git
+cd iris-recognition
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+**Windows (PowerShell):**
 ```powershell
+git clone https://github.com/your-username/iris-recognition.git
+cd iris-recognition
+python -m venv .venv
 .\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
 ```
 
-### Step 2: Run Automated Test Suite
-```powershell
-python -m pytest -v
-```
-*(All 21 unit & integration tests pass with 100% coverage across labels, metrics, preprocessing, methods, and API)*
+### Step 2: Dataset Configuration (Optional)
+The system automatically discovers the UBIPr both_eyes dataset if placed in `data/ubipr2/both_eyes/` or `data/`.
 
-### Step 3: Run Dataset Audit
-```powershell
+To point to a custom dataset location on your system, set the `IRIS_DATASET_DIR` environment variable:
+- **Linux / macOS:** `export IRIS_DATASET_DIR="/path/to/both_eyes"`
+- **Windows (PowerShell):** `$env:IRIS_DATASET_DIR="C:\path\to\both_eyes"`
+
+*(Note: Even without downloading the full dataset, the entire test suite runs with synthetic fixtures, and the web application boots safely in dashboard inspection mode).*
+
+### Step 3: Run Automated Test Suite
+```bash
+pytest -v
+```
+*(All 22 unit & integration tests verify labels, metrics, preprocessing, methods, and API)*
+
+### Step 4: Run Dataset Audit & Benchmark Evaluation
+```bash
 python scripts/audit_dataset.py
-```
-
-### Step 4: Run Benchmark Evaluation
-```powershell
 python scripts/run_evaluation.py
 ```
 
 ### Step 5: Start Flask Web App
-```powershell
+```bash
 python app.py
 ```
 Open your browser to: `http://127.0.0.1:5000`

@@ -20,10 +20,10 @@ class GaborSvmMethod(BaseIrisMethod):
     def __init__(
         self,
         orientations: Tuple[float, ...] = (0.0, np.pi / 4, np.pi / 2, 3 * np.pi / 4),
-        wavelengths: Tuple[float, ...] = (6.0, 12.0),
-        grid_rows: int = 2,
-        grid_cols: int = 8,
-        c_param: float = DEFAULT_SVM_C,
+        wavelengths: Tuple[float, ...] = (4.0, 8.0, 12.0),
+        grid_rows: int = 4,
+        grid_cols: int = 16,
+        c_param: float = 0.2,
         random_state: int = DEFAULT_RANDOM_SEED
     ):
         super().__init__(
@@ -46,6 +46,7 @@ class GaborSvmMethod(BaseIrisMethod):
     def extract_features(self, normalized: NormalizedIris) -> np.ndarray:
         """
         Extract fixed-length Gabor energy statistics from normalized dual-eye iris.
+        Computes mean, standard deviation, and energy across spatial blocks.
         """
         img = normalized.normalized_image.astype(np.float32)
         img = (img - img.mean()) / (img.std() + 1e-6)
@@ -53,20 +54,21 @@ class GaborSvmMethod(BaseIrisMethod):
         feats = []
         for theta in self.orientations:
             for lambd in self.wavelengths:
-                k_real = cv2.getGaborKernel((15, 15), 3.0, theta, lambd, 0.5, 0, ktype=cv2.CV_32F)
-                k_imag = cv2.getGaborKernel((15, 15), 3.0, theta, lambd, 0.5, np.pi / 2, ktype=cv2.CV_32F)
+                k_real = cv2.getGaborKernel((17, 17), 3.0, theta, lambd, 0.5, 0, ktype=cv2.CV_32F)
+                k_imag = cv2.getGaborKernel((17, 17), 3.0, theta, lambd, 0.5, np.pi / 2, ktype=cv2.CV_32F)
 
                 f_r = cv2.filter2D(img, cv2.CV_32F, k_real)
                 f_i = cv2.filter2D(img, cv2.CV_32F, k_imag)
                 magnitude = np.sqrt(f_r ** 2 + f_i ** 2)
 
                 h, w = magnitude.shape
-                bh, bw = h // self.grid_rows, w // self.grid_cols
+                bh, bw = max(1, h // self.grid_rows), max(1, w // self.grid_cols)
                 for r in range(self.grid_rows):
                     for c in range(self.grid_cols):
                         block = magnitude[r * bh : (r + 1) * bh, c * bw : (c + 1) * bw]
                         feats.append(float(block.mean()))
                         feats.append(float(block.std()))
+                        feats.append(float(np.sqrt((block ** 2).mean())))
 
         vec = np.array(feats, dtype=np.float32)
         norm = np.linalg.norm(vec) + 1e-7
@@ -88,8 +90,9 @@ class GaborSvmMethod(BaseIrisMethod):
         self.svm_model = LinearSVC(
             C=self.c_param,
             random_state=self.random_state,
-            max_iter=3000,
-            dual="auto"
+            max_iter=1000,
+            tol=1e-3,
+            dual=True
         )
         self.svm_model.fit(scaled_X, self.gallery_labels)
         self.is_fitted = True
@@ -101,6 +104,14 @@ class GaborSvmMethod(BaseIrisMethod):
 
         probe_scaled = self.scaler.transform(probe_feature.reshape(1, -1))
         decision_scores = self.svm_model.decision_function(probe_scaled)
+
+        # Compute cosine similarity against all enrolled templates to ground SVM decisions
+        probe_norm = probe_feature / (np.linalg.norm(probe_feature) + 1e-7)
+        template_sims = np.dot(self.gallery_features, probe_norm)
+        subject_max_cos: Dict[str, float] = {}
+        for sim_val, label in zip(template_sims, self.gallery_labels):
+            if label not in subject_max_cos or sim_val > subject_max_cos[label]:
+                subject_max_cos[label] = float(sim_val)
 
         # In binary classification, decision_function returns 1D array of shape (1,)
         # In multiclass, returns (1, n_classes)
@@ -115,18 +126,22 @@ class GaborSvmMethod(BaseIrisMethod):
         scored_candidates = []
         for subj, raw_s in scores.items():
             # Normalized similarity mapping via logistic sigmoid: 1 / (1 + exp(-score))
-            sim = round(float(1.0 / (1.0 + np.exp(-max(-10.0, min(10.0, raw_s))))), 4)
+            sim_svm = float(1.0 / (1.0 + np.exp(-max(-10.0, min(10.0, raw_s)))))
+            cos_s = max(0.0, min(1.0, subject_max_cos.get(subj, 0.0)))
+            # Calibrated combination: 60% template cosine similarity + 40% SVM boundary margin
+            calibrated_sim = round(float(0.60 * cos_s + 0.40 * sim_svm), 4)
+
             scored_candidates.append({
                 "subject_id": subj,
                 "raw_score": round(raw_s, 4),
                 "score_type": self.score_type,
                 "higher_is_better": self.higher_is_better,
-                "normalized_similarity": sim,
+                "normalized_similarity": calibrated_sim,
                 "is_match": self.is_match(raw_s)
             })
 
-        # Descending sort (higher decision score is better)
-        scored_candidates.sort(key=lambda x: x["raw_score"], reverse=True)
+        # Descending sort by calibrated similarity (higher is better)
+        scored_candidates.sort(key=lambda x: x["normalized_similarity"], reverse=True)
 
         for rank_idx, cand in enumerate(scored_candidates[:top_k], start=1):
             cand["rank"] = rank_idx

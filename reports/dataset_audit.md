@@ -1,7 +1,7 @@
 # UBIPR Both-Eyes Dataset Audit Report
 
 ## 1. Executive Summary
-- **Source Directory:** `c:\Users\Piyush\OneDrive\Desktop\ubipr2\both_eyes`
+- **Source Directory:** `data/ubipr2/both_eyes`
 - **Total Files Inventoried:** 11020
 - **Ignored Files / OS Artifacts:** 2 (.DS_Store, ._.DS_Store)
 - **Valid Paired Samples:** 5509 (100% paired .jpg images and .png masks)

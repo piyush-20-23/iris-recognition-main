@@ -4,9 +4,19 @@ from pathlib import Path
 # Base Paths
 BASE_DIR = Path(__file__).resolve().parent
 
-# Dataset path: environment variable takes precedence, fallback to default local desktop location
-DEFAULT_DATASET_DIR = Path(r"c:\Users\Piyush\OneDrive\Desktop\ubipr2\both_eyes")
-DATASET_DIR = Path(os.environ.get("IRIS_DATASET_DIR", str(DEFAULT_DATASET_DIR)))
+# Dataset path: environment variable takes precedence, fallback to local project data directories
+candidate_paths = [
+    Path(os.environ["IRIS_DATASET_DIR"]) if os.environ.get("IRIS_DATASET_DIR") else None,
+    BASE_DIR / "data" / "ubipr2" / "both_eyes",
+    BASE_DIR / "data" / "both_eyes",
+    BASE_DIR / "data",
+]
+candidate_paths = [p for p in candidate_paths if p is not None and str(p) not in ("", ".")]
+DEFAULT_DATASET_DIR = next(
+    (p for p in candidate_paths if p.exists() and any(p.glob("*.jpg"))),
+    BASE_DIR / "data" / "ubipr2" / "both_eyes"
+)
+DATASET_DIR = Path(os.environ["IRIS_DATASET_DIR"]) if os.environ.get("IRIS_DATASET_DIR") else DEFAULT_DATASET_DIR
 
 # Output directories
 REPORTS_DIR = BASE_DIR / "reports"

@@ -1,5 +1,5 @@
 {
-  "dataset_dir": "c:\\Users\\Piyush\\OneDrive\\Desktop\\ubipr2\\both_eyes",
+  "dataset_dir": "data/ubipr2/both_eyes",
   "cohort_subjects": 25,
   "identification_results": [
     {

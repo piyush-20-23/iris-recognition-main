@@ -2,14 +2,39 @@ import io
 import cv2
 import numpy as np
 import pytest
+import config
 from app import app, recognition_service
+from src.preprocessing.normalization import NormalizedIris
+
+
+def _enroll_synthetic_gallery(service):
+    dummy_img = np.random.randint(40, 200, (64, 512), dtype=np.uint8)
+    dummy_mask = np.ones((64, 512), dtype=np.uint8)
+    dummy_norm = NormalizedIris(dummy_img, dummy_mask, eye_count=2)
+
+    subjects = ["C1", "C2", "C3", "C4", "C5"]
+    for method_name, method in service.methods.items():
+        feats = []
+        labels = []
+        for subj in subjects:
+            for _ in range(2):
+                feat = method.extract_features(dummy_norm)
+                feats.append(feat)
+                labels.append(subj)
+        method.fit(feats, labels)
+        default_thresh = 0.70 if method_name == "ensemble_fusion" else (0.97 if method.higher_is_better else 0.31)
+        method.set_validation_threshold(default_thresh)
+    service.enrolled_subjects = subjects
+    service.is_enrolled = True
 
 
 @pytest.fixture(scope="module")
 def client():
     app.config["TESTING"] = True
-    # Pre-enroll gallery with 5 subjects for fast testing
-    recognition_service.initialize_and_enroll(enrollment_size=2, max_subjects=5)
+    if config.DATASET_DIR.exists() and any(config.DATASET_DIR.glob("*.jpg")):
+        recognition_service.initialize_and_enroll(enrollment_size=2, max_subjects=5)
+    else:
+        _enroll_synthetic_gallery(recognition_service)
     with app.test_client() as c:
         yield c
 
@@ -85,6 +110,7 @@ def test_identify_success(client):
     assert "gabor_hamming" in res_data["results"]
     assert "lbp_knn" in res_data["results"]
     assert "gabor_svm" in res_data["results"]
+    assert "ensemble_fusion" in res_data["results"]
 
 
 def test_verify_endpoint(client):
@@ -94,7 +120,7 @@ def test_verify_endpoint(client):
     data = {
         "image": (io.BytesIO(img_bytes), "test.jpg"),
         "claimed_subject_id": claimed,
-        "method": "gabor_hamming"
+        "method": "ensemble_fusion"
     }
     res = client.post("/api/v1/verify", data=data, content_type="multipart/form-data")
     assert res.status_code == 200

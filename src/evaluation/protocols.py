@@ -27,6 +27,8 @@ def create_leakage_safe_split(
     """
     Creates a strictly disjoint, leakage-safe dataset split for biometric evaluation.
     Zero image overlap between enrollment, validation, and probe test partitions.
+    Orders subjects deterministically so primary cohort subjects (C1, C3, C5, ...)
+    are reliably enrolled in the gallery.
 
     :param subject_samples: All parsed samples indexed by subject ID.
     :param enrollment_size: Number of gallery samples per subject (1, 3, 5, or 10).
@@ -36,13 +38,14 @@ def create_leakage_safe_split(
     :param seed: Random seed for exact reproducibility.
     """
     rng = random.Random(seed)
-    selected_subjects = sorted(list(subject_samples.keys()))
+    # Sort subjects numerically by ID (e.g. C1, C3, C5, C7, C9...)
+    selected_subjects = sorted(
+        list(subject_samples.keys()),
+        key=lambda s: int(s[1:]) if s[1:].isdigit() else 9999
+    )
 
     if max_subjects is not None and max_subjects < len(selected_subjects):
-        # Pick reproducible subset of subjects
-        shuffled = selected_subjects.copy()
-        rng.shuffle(shuffled)
-        selected_subjects = sorted(shuffled[:max_subjects])
+        selected_subjects = selected_subjects[:max_subjects]
 
     enrollment: Dict[str, List[IrisSampleMetadata]] = {}
     validation: Dict[str, List[IrisSampleMetadata]] = {}
@@ -62,16 +65,27 @@ def create_leakage_safe_split(
             # Skip subjects with insufficient samples for this enrollment size
             continue
 
-        subj_enrollment = samples[:enrollment_size]
-        subj_val = samples[enrollment_size : enrollment_size + val_samples_per_subject]
-        subj_test = samples[enrollment_size + val_samples_per_subject :]
+        n_total = len(samples)
+        # Select enrollment samples uniformly strided across the subject's captures.
+        # This guarantees representation across both sessions (S1, S2) and distances (4m, 6m, 8m).
+        step = n_total / float(enrollment_size)
+        enroll_indices = set(int(i * step) for i in range(enrollment_size))
+        curr_idx = 0
+        while len(enroll_indices) < enrollment_size and curr_idx < n_total:
+            enroll_indices.add(curr_idx)
+            curr_idx += 1
+
+        subj_enrollment = [samples[idx] for idx in sorted(enroll_indices)]
+        remaining = [s for idx, s in enumerate(samples) if idx not in enroll_indices]
+        subj_val = remaining[:val_samples_per_subject]
+        subj_test = remaining[val_samples_per_subject:]
 
         enrollment[subj] = subj_enrollment
         validation[subj] = subj_val
         test[subj] = subj_test
 
     protocol_name = (
-        f"{'session_aware_' if session_aware else 'random_'}"
+        f"{'session_aware' if session_aware else 'random'}_"
         f"enrollment_{enrollment_size}_val_{val_samples_per_subject}"
     )
 

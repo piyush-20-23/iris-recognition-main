@@ -11,15 +11,16 @@ class LbpKnnMethod(BaseIrisMethod):
     """
     Method 2: Local Binary Patterns (LBP) Histogram Feature Extraction + K-Nearest Neighbors.
     Computes spatial block LBP descriptors and classifies via gallery nearest-neighbor matching.
+    Uses Cosine metric with per-block L2 normalization for enhanced texture invariance.
     """
 
     def __init__(
         self,
-        grid_rows: int = 4,
+        grid_rows: int = 8,
         grid_cols: int = 16,
         n_bins: int = 32,
         k_neighbors: int = DEFAULT_KNN_NEIGHBORS,
-        metric: str = DEFAULT_KNN_METRIC
+        metric: str = "cosine"
     ):
         super().__init__(
             name="lbp_knn",
@@ -39,12 +40,15 @@ class LbpKnnMethod(BaseIrisMethod):
     def extract_features(self, normalized: NormalizedIris) -> np.ndarray:
         """
         Extract spatial block LBP histograms from normalized dual-eye iris strip.
+        Incorporates segmentation mask weighting when available.
         """
         img = normalized.normalized_image
+        mask = normalized.normalized_mask
+
         center = img[1:-1, 1:-1]
         lbp = np.zeros(center.shape, dtype=np.uint8)
 
-        # 8 neighbors
+        # 8 circular neighbors
         neighbors = [
             (-1, -1, 0), (-1, 0, 1), (-1, 1, 2),
             (0, 1, 3), (1, 1, 4), (1, 0, 5),
@@ -54,18 +58,29 @@ class LbpKnnMethod(BaseIrisMethod):
             shifted = img[1 + dy : img.shape[0] - 1 + dy, 1 + dx : img.shape[1] - 1 + dx]
             lbp |= ((shifted >= center).astype(np.uint8) << bit)
 
+        mask_c = mask[1:-1, 1:-1] if mask is not None else None
+
         # Spatial block histogram partitioning
         h, w = lbp.shape
-        bh, bw = h // self.grid_rows, w // self.grid_cols
+        bh, bw = max(1, h // self.grid_rows), max(1, w // self.grid_cols)
         histograms = []
 
         for r in range(self.grid_rows):
             for c in range(self.grid_cols):
                 block = lbp[r * bh : (r + 1) * bh, c * bw : (c + 1) * bw]
-                hist, _ = np.histogram(block, bins=self.n_bins, range=(0, 256))
-                hist = hist.astype(np.float32)
-                hist_norm = np.linalg.norm(hist) + 1e-7
-                histograms.append(hist / hist_norm)
+                if mask_c is not None:
+                    b_mask = mask_c[r * bh : (r + 1) * bh, c * bw : (c + 1) * bw]
+                    valid = block[b_mask > 0]
+                else:
+                    valid = block.flatten()
+
+                if len(valid) > 0:
+                    hist, _ = np.histogram(valid, bins=self.n_bins, range=(0, 256))
+                    hist = hist.astype(np.float32)
+                    hist /= (np.linalg.norm(hist) + 1e-6)
+                else:
+                    hist = np.zeros(self.n_bins, dtype=np.float32)
+                histograms.append(hist)
 
         feature_vector = np.concatenate(histograms)
         # Global L2 unit-norm scaling
@@ -79,7 +94,7 @@ class LbpKnnMethod(BaseIrisMethod):
         if self.metric == "cosine":
             sim = float(np.dot(feature_a, feature_b))
             return max(0.0, 1.0 - sim)
-        # Default: Euclidean distance
+        # Euclidean distance
         return float(np.linalg.norm(feature_a - feature_b))
 
     def fit(self, features: List[np.ndarray], labels: List[str]) -> "LbpKnnMethod":

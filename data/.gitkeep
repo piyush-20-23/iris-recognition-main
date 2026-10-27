@@ -1,0 +1,2 @@
+# Place UBIPr both_eyes dataset here: data/ubipr2/both_eyes/
+# Or set IRIS_DATASET_DIR environment variable to point to your dataset directory.

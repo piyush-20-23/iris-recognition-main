@@ -22,12 +22,12 @@ def run_identification_evaluation(
     extraction_latencies = []
 
     # 1. Feature extraction and fitting on enrollment set
-    total_enroll_samples = 0
+    total_samples_evaluated = 0
     seg_successes = 0
 
     for subj, samples in split.enrollment_samples.items():
         for s in samples:
-            total_enroll_samples += 1
+            total_samples_evaluated += 1
             t0 = time.perf_counter()
             img = load_image(s.image_path)
             mask = load_mask(s.mask_path) if s.mask_path else None
@@ -52,7 +52,7 @@ def run_identification_evaluation(
 
     for subj, samples in split.test_samples.items():
         for s in samples:
-            total_enroll_samples += 1
+            total_samples_evaluated += 1
             img = load_image(s.image_path)
             mask = load_mask(s.mask_path) if s.mask_path else None
             norm, seg = extract_and_normalize(img, mask)
@@ -71,7 +71,7 @@ def run_identification_evaluation(
     # 3. Compute accuracies
     rank_1_acc = compute_rank_k_accuracy(predictions, ground_truth_labels, k=1)
     rank_5_acc = compute_rank_k_accuracy(predictions, ground_truth_labels, k=min(5, top_k))
-    usability_rate = round(float(seg_successes / max(1, total_enroll_samples)), 4)
+    usability_rate = round(float(seg_successes / max(1, total_samples_evaluated)), 4)
 
     return {
         "method_name": method.name,

@@ -1,20 +1,26 @@
 import json
+import logging
+import pickle
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 import numpy as np
 
+import config
 from config import DATASET_DIR, DEFAULT_ENROLLMENT_SIZES, DEFAULT_RANDOM_SEED
 from src.data.inventory import DatasetInventory
 from src.data.labels import IrisSampleMetadata
 from src.evaluation.protocols import create_leakage_safe_split
 from src.evaluation.verification import run_verification_evaluation
 from src.methods.base import BaseIrisMethod
+from src.methods.ensemble_fusion import EnsembleFusionMethod
 from src.methods.gabor_hamming import GaborHammingMethod
 from src.methods.lbp_knn import LbpKnnMethod
 from src.methods.gabor_svm import GaborSvmMethod
 from src.preprocessing.image_io import load_image, load_mask, ImageReadError
 from src.preprocessing.quality import assess_image_quality
 from src.preprocessing.normalization import extract_and_normalize
+
+logger = logging.getLogger("iris_service")
 
 
 class RecognitionService:
@@ -28,9 +34,10 @@ class RecognitionService:
         self.dataset_dir = Path(dataset_dir)
         self.inventory = DatasetInventory(self.dataset_dir)
         self.methods: Dict[str, BaseIrisMethod] = {
-            "gabor_hamming": GaborHammingMethod(),
+            "ensemble_fusion": EnsembleFusionMethod(),
+            "gabor_svm": GaborSvmMethod(),
             "lbp_knn": LbpKnnMethod(),
-            "gabor_svm": GaborSvmMethod()
+            "gabor_hamming": GaborHammingMethod()
         }
         self.is_enrolled: bool = False
         self.enrolled_subjects: List[str] = []
@@ -41,13 +48,28 @@ class RecognitionService:
     def initialize_and_enroll(
         self,
         enrollment_size: int = 3,
-        max_subjects: Optional[int] = 30,
+        max_subjects: Optional[int] = 50,
         seed: int = DEFAULT_RANDOM_SEED
     ) -> None:
         """
-        Loads dataset inventory and enrolls the gallery into all 3 methods.
-        Also derives validation operating thresholds for verification.
+        Loads dataset inventory and enrolls the gallery into all methods.
+        Caches models to disk for fast pre-warmed instant boots.
         """
+        cache_file = config.MODELS_DIR / f"gallery_cache_sz{enrollment_size}_max{max_subjects}_seed{seed}.pkl"
+        if cache_file.exists():
+            try:
+                with open(cache_file, "rb") as cf:
+                    cached = pickle.load(cf)
+                self.cached_summary = cached.get("summary")
+                self.enrolled_subjects = cached["enrolled_subjects"]
+                self.methods = cached["methods"]
+                self.enrollment_size = enrollment_size
+                self.is_enrolled = True
+                logger.info(f"Loaded {len(self.enrolled_subjects)} enrolled subjects from gallery cache.")
+                return
+            except Exception as e:
+                logger.warning(f"Could not load gallery cache: {e}. Recomputing enrollment...")
+
         self.cached_summary = self.inventory.run_inventory(sample_decode_limit=50)
         split = create_leakage_safe_split(
             self.inventory.subject_samples,
@@ -59,24 +81,45 @@ class RecognitionService:
         )
 
         self.enrollment_size = enrollment_size
-        self.enrolled_subjects = sorted(list(split.enrollment_samples.keys()))
+        self.enrolled_subjects = sorted(
+            list(split.enrollment_samples.keys()),
+            key=lambda s: int(s[1:]) if s[1:].isdigit() else 9999
+        )
 
-        # Enroll gallery templates for each method
-        for method_name, method in self.methods.items():
+        # Pre-extract normalized irises for all enrollment samples to avoid duplicate preprocessing
+        extracted_norms: Dict[str, List[Any]] = {}
+        for subj, samples in split.enrollment_samples.items():
+            extracted_norms[subj] = []
+            for s in samples:
+                img = load_image(s.image_path)
+                mask = load_mask(s.mask_path) if s.mask_path else None
+                norm, _ = extract_and_normalize(img, mask)
+                extracted_norms[subj].append(norm)
+
+        # Enroll gallery templates for base methods first
+        base_method_names = ["gabor_svm", "lbp_knn", "gabor_hamming"]
+        for method_name in base_method_names:
+            method = self.methods[method_name]
             feats = []
             labels = []
-            for subj, samples in split.enrollment_samples.items():
-                for s in samples:
-                    img = load_image(s.image_path)
-                    mask = load_mask(s.mask_path) if s.mask_path else None
-                    norm, _ = extract_and_normalize(img, mask)
+            for subj, norms in extracted_norms.items():
+                for norm in norms:
                     feat = method.extract_features(norm)
                     feats.append(feat)
                     labels.append(subj)
             method.fit(feats, labels)
 
-            # Load validation-derived threshold from benchmark summary if available
-            eval_summary_file = Path(__file__).resolve().parent.parent.parent / "outputs" / "results" / "evaluation_summary.json"
+        # Wire ensemble fusion to reuse fitted base models (avoids duplicate extraction & fitting)
+        fusion = self.methods.get("ensemble_fusion")
+        if isinstance(fusion, EnsembleFusionMethod):
+            fusion.method_svm = self.methods["gabor_svm"]
+            fusion.method_lbp = self.methods["lbp_knn"]
+            fusion.enrolled_subjects = self.enrolled_subjects
+            fusion.is_fitted = True
+
+        # Derivation or setting of validation operating thresholds
+        for method_name, method in self.methods.items():
+            eval_summary_file = config.RESULTS_DIR / "evaluation_summary.json"
             threshold_set = False
             if eval_summary_file.exists():
                 try:
@@ -91,10 +134,29 @@ class RecognitionService:
                     pass
 
             if not threshold_set:
-                default_thresh = 0.97 if method.higher_is_better else (0.25 if method_name == "gabor_hamming" else 0.31)
-                method.set_validation_threshold(default_thresh)
+                if method_name == "ensemble_fusion":
+                    method.set_validation_threshold(0.52)
+                elif method.higher_is_better:
+                    method.set_validation_threshold(0.50)
+                elif method_name == "gabor_hamming":
+                    method.set_validation_threshold(0.35)
+                else:
+                    method.set_validation_threshold(0.35)
 
         self.is_enrolled = True
+
+        # Cache gallery models to disk
+        try:
+            cache_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(cache_file, "wb") as cf:
+                pickle.dump({
+                    "summary": self.cached_summary,
+                    "enrolled_subjects": self.enrolled_subjects,
+                    "methods": self.methods
+                }, cf)
+            logger.info(f"Saved gallery cache with {len(self.enrolled_subjects)} subjects.")
+        except Exception as e:
+            logger.warning(f"Could not save gallery cache: {e}")
 
     def identify(
         self,
@@ -109,6 +171,12 @@ class RecognitionService:
         """
         if not self.is_enrolled:
             self.initialize_and_enroll()
+
+        # Auto-resolve mask from dataset if path was provided without mask
+        if mask_source is None and isinstance(image_source, (str, Path)):
+            cand = Path(image_source).with_suffix(".png")
+            if cand.exists():
+                mask_source = cand
 
         img = load_image(image_source)
         mask = load_mask(mask_source) if mask_source is not None else None
@@ -160,7 +228,7 @@ class RecognitionService:
         image_source: Union[str, Path, bytes, np.ndarray],
         claimed_subject_id: str,
         mask_source: Optional[Union[str, Path, bytes, np.ndarray]] = None,
-        method_name: str = "gabor_hamming"
+        method_name: str = "ensemble_fusion"
     ) -> Dict[str, Any]:
         """
         1:1 Verification against a claimed identity.
@@ -175,8 +243,14 @@ class RecognitionService:
         if claimed_subject_id not in self.enrolled_subjects:
             return {
                 "status": "error",
-                "message": f"Claimed subject ID '{claimed_subject_id}' is not in enrolled gallery."
+                "message": f"Claimed subject ID '{claimed_subject_id}' is not in enrolled gallery. Enrolled: {self.enrolled_subjects[:10]}..."
             }
+
+        # Auto-resolve mask from dataset if path was provided without mask
+        if mask_source is None and isinstance(image_source, (str, Path)):
+            cand = Path(image_source).with_suffix(".png")
+            if cand.exists():
+                mask_source = cand
 
         img = load_image(image_source)
         mask = load_mask(mask_source) if mask_source is not None else None
