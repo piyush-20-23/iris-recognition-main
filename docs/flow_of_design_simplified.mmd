@@ -1,0 +1,46 @@
+flowchart TD
+    subgraph S1 ["1. Input Acquisition"]
+        A["Input Probe Image"] --> B["Image Validation & Label Parsing"]
+    end
+
+    subgraph S2 ["2. Quality Assessment"]
+        B --> C["Sharpness, Contrast & Lighting Check"]
+        C --> D{"Quality Pass?"}
+        D -- No --> D_Reject["Reject or Flag Low Quality"]
+        D -- Yes --> E{"Mask Provided?"}
+    end
+
+    subgraph S3 ["3. Iris Segmentation"]
+        E -- Yes --> F1["Ground Truth Mask Segmentation"]
+        E -- No --> F2["Automated Ocular Detection"]
+        F1 --> G["Isolate Left and Right Eye Patches"]
+        F2 --> G
+    end
+
+    subgraph S4 ["4. Daugman Normalization"]
+        G --> H["Polar Rubber-Sheet Normalization"]
+        H --> I["Combined Dual-Eye Strip (64 x 512)"]
+    end
+
+    subgraph S5 ["5. Feature Extraction"]
+        I --> J1["Method 1: Gabor Filters<br/>(1024-bit Iris Code)"]
+        I --> J2["Method 2: Spatial LBP<br/>(2048-dim Histogram)"]
+        I --> J3["Method 3: Gabor Energy<br/>(256-dim Vector)"]
+    end
+
+    subgraph S6 ["6. Matching Engine"]
+        J1 --> K1["Masked Hamming Distance<br/>(Rotation Compensation)"]
+        J2 --> K2["Nearest Neighbor Search<br/>(Euclidean Distance)"]
+        J3 --> K3["Support Vector Machine<br/>(Linear SVM Score)"]
+    end
+
+    subgraph S7 ["7. Biometric Decision"]
+        K1 & K2 & K3 --> L{"Operational Mode"}
+        L --> M1["1:N Identification<br/>(Rank-K Matching)"]
+        L --> M2["1:1 Verification<br/>(Threshold Match / No Match)"]
+    end
+
+    subgraph S8 ["8. Output & Clients"]
+        M1 & M2 --> N["Flask REST API & Web UI"]
+        N --> O["Mobile & Enterprise Clients"]
+    end
