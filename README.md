@@ -8,7 +8,7 @@
 
 A modular, research-grade iris biometric recognition system engineered in Python, OpenCV, scikit-learn, and Flask, benchmarked on the official **UBIPr (University of Beira Interior Periocular) Segmented Both-Eyes Dataset** (`ubipr2`).
 
-The system implements three mathematically distinct biometric feature extraction and matching algorithms, rigorous leakage-safe cross-session evaluation protocols, a versioned REST API, and an interactive browser-based biometric dashboard. The recognition core is completely decoupled from the HTTP server layer, enabling direct downstream integration into enterprise Spring Boot microservice architectures and mobile Android applications.
+The system implements four mathematically distinct biometric feature extraction and matching algorithms, rigorous leakage-safe cross-session evaluation protocols, a versioned REST API, and an interactive browser-based biometric dashboard. The recognition core is completely decoupled from the HTTP server layer, enabling direct downstream integration into enterprise Spring Boot microservice architectures and mobile Android applications.
 
 ---
 
@@ -30,6 +30,7 @@ The system implements three mathematically distinct biometric feature extraction
    - [Method 1: Gabor Wavelet Bank + Masked Hamming Distance](#method-1-gabor-wavelet-bank--masked-hamming-distance-gabor_hamming)
    - [Method 2: Spatial Block Local Binary Patterns + K-Nearest Neighbors](#method-2-spatial-block-local-binary-patterns--k-nearest-neighbors-lbp_knn)
    - [Method 3: Multi-Filter Gabor Energy Statistics + Linear SVM](#method-3-multi-filter-gabor-energy-statistics--linear-svm-gabor_svm)
+   - [Method 4: Score-Level Multi-Modal Ensemble Fusion](#method-4-score-level-multi-modal-ensemble-fusion-ensemble_fusion)
    - [Comparative Algorithmic Analysis](#comparative-algorithmic-analysis)
 5. [Empirical Benchmark Results & Evaluation](#5-empirical-benchmark-results--evaluation)
    - [Leakage-Safe Partitioning Protocol](#leakage-safe-partitioning-protocol)
@@ -159,7 +160,7 @@ $$I(x(r, \theta), y(r, \theta)) \longrightarrow I(r, \theta)$$
 
 ## 4. Biometric Recognition Methods
 
-The system includes three mathematically distinct algorithms inheriting from [`BaseIrisMethod`](src/methods/base.py):
+The system includes four mathematically distinct algorithms inheriting from [`BaseIrisMethod`](src/methods/base.py):
 
 ### Method 1: Gabor Wavelet Bank + Masked Hamming Distance (`gabor_hamming`)
 - **Mathematical Principle:** 2D Gabor filters model spatial frequency and orientation selectivity in the visual cortex:
@@ -176,36 +177,43 @@ The system includes three mathematically distinct algorithms inheriting from [`B
 ### Method 2: Spatial Block Local Binary Patterns + K-Nearest Neighbors (`lbp_knn`)
 - **Mathematical Principle:** Micro-texture descriptor capturing circular intensity gradients:
   $$\text{LBP}_{P, R}(x_c, y_c) = \sum_{p=0}^{P-1} s(g_p - g_c) \cdot 2^p, \quad s(z) = \begin{cases} 1 & z \ge 0 \\ 0 & z < 0 \end{cases}$$
-- **Grid Partitioning:** The $64 \times 512$ polar strip is divided into a $4 \times 16$ spatial grid (64 blocks).
-- **Feature Vector:** In each block, a 32-bin normalized histogram is extracted. Concatenating all 64 blocks generates a **2,048-dimensional dense vector**, which is globally $L_2$-normalized:
-  $$V_{\text{final}} = \frac{V}{\|V\|_2 + \epsilon} \in \mathbb{R}^{2048}$$
-- **Matching:** Nearest Neighbor search using Euclidean distance ($L_2$).
-- **Score Direction:** Lower distance is better ($0.0 \to \sqrt{2}$). Normalized similarity: $\frac{1}{1 + \text{dist}}$.
+- **Grid Partitioning:** The $64 \times 512$ polar strip is divided into an $8 \times 16$ spatial grid (128 blocks).
+- **Feature Vector:** In each block, a 32-bin normalized histogram is extracted with segmentation mask weighting. Concatenating all 128 blocks generates a **4,096-dimensional dense vector**, which is globally $L_2$-normalized:
+  $$V_{\text{final}} = \frac{V}{\|V\|_2 + \epsilon} \in \mathbb{R}^{4096}$$
+- **Matching:** Nearest Neighbor search using **Cosine distance** metric ($1.0 - \mathbf{v}_A \cdot \mathbf{v}_B$).
+- **Score Direction:** Lower distance is better ($0.0 \to 1.0$). Normalized similarity: $\frac{1}{1 + \text{dist}}$.
 
 ### Method 3: Multi-Filter Gabor Energy Statistics + Linear SVM (`gabor_svm`)
 - **Mathematical Principle:** Continuous magnitude energy envelopes quantify regional spectral power:
   $$E(x, y) = \sqrt{(I * G_{\text{real}})^2 + (I * G_{\text{imag}})^2}$$
-- **Statistical Feature Pooling:** 8 Gabor magnitude maps are partitioned into a $2 \times 8$ spatial block grid (16 blocks). Within each block, mean energy ($\mu$) and standard deviation ($\sigma$) are calculated, creating a **256-dimensional feature vector** ($8 \times 16 \times 2$).
-- **Classification:** `StandardScaler` reproducible zero-mean unit-variance transformation followed by a multi-class Linear Support Vector Machine (`LinearSVC`).
-- **Scoring:** Evaluates the signed hyperplane margin:
-  $$f_c(\mathbf{z}_{\text{probe}}) = \mathbf{w}_c^T \hat{\mathbf{z}}_{\text{probe}} + b_c$$
-- **Score Direction:** Higher is better ($-\infty \to +\infty$). Normalized similarity is mapped via logistic sigmoid: $\frac{1}{1 + e^{-\text{score}}}$.
+- **Statistical Feature Pooling:** 12 Gabor magnitude maps (4 orientations: $0, \pi/4, \pi/2, 3\pi/4$; 3 wavelengths: $4.0, 8.0, 12.0$) are partitioned into a $4 \times 16$ spatial block grid (64 blocks). Within each block, mean energy ($\mu$), standard deviation ($\sigma$), and root-mean-square energy (RMS) are calculated, creating a **2,304-dimensional continuous vector** ($12 \times 64 \times 3$).
+- **Classification & Scoring:** Multi-class `LinearSVC` ($C=0.2$) combined with template cosine similarity. The final ranking blends 60% template cosine similarity with 40% calibrated SVM decision boundary margin:
+  $$\text{Sim}_{\text{calibrated}} = 0.60 \cdot \text{CosSim} + 0.40 \cdot \frac{1}{1 + e^{-\text{score}}}$$
+- **Score Direction:** Higher is better ($-\infty \to +\infty$). Normalized similarity: $[0.0, 1.0]$.
+
+### Method 4: Score-Level Multi-Modal Ensemble Fusion (`ensemble_fusion`)
+- **Mathematical Principle:** Fuses multi-scale continuous Gabor spectral energy with fine spatial block LBP micro-texture histograms at the decision level.
+- **Ensemble Formulation:** Evaluates candidate identity probabilities by weighting normalized outputs from both modalities:
+  $$\text{Score}_{\text{ensemble}} = w_{\text{svm}} \cdot \text{Sim}_{\text{svm}} + w_{\text{lbp}} \cdot \text{Sim}_{\text{lbp}}$$
+  where $w_{\text{svm}} = 0.55$ and $w_{\text{lbp}} = 0.45$.
+- **Score Direction:** Higher confidence is better ($0.0 \to 1.0$).
 
 ---
 
 ### Comparative Algorithmic Analysis
 
-| Dimension | Method 1: Gabor + Hamming | Method 2: LBP + KNN | Method 3: Gabor + SVM |
-|:---|:---|:---|:---|
-| **Representation** | 1024-bit binary IrisCode | 2048-dim normalized histogram | 256-dim continuous statistical vector |
-| **Invariance Strategy** | Explicit dual-eye cyclic roll | Spatial block pooling | Convex regularized margin |
-| **Occlusion Handling** | Bitwise logical masking | Block histogram normalisation | Global energy normalisation |
-| **Classifier** | Exhaustive shift min-Hamming | K-Nearest Neighbors ($k=1, 3$) | Linear SVM Hyperplane (`LinearSVC`) |
-| **Raw Score Range** | $[0.0, 1.0]$ (Lower is better) | $[0.0, \sqrt{2}]$ (Lower is better) | $(-\infty, +\infty)$ (Higher is better) |
-| **Rank-1 Acc (Enroll 10)**| 30.4% | 43.8% | **46.7%** |
-| **Rank-5 Acc (Enroll 10)**| 53.3% | **74.2%** | 73.3% |
-| **Extraction Latency** | ~20.9 ms | **~9.9 ms** | ~47.3 ms |
-| **Matching Latency** | ~296.3 ms (25 roll passes) | **~0.30 ms** | ~1.39 ms |
+| Dimension | Method 1: Gabor + Hamming | Method 2: LBP + KNN | Method 3: Gabor + SVM | Method 4: Ensemble Fusion |
+|:---|:---|:---|:---|:---|
+| **Representation** | 1024-bit binary IrisCode | 4096-dim normalized histogram | 2304-dim continuous statistical vector | Multi-modal hybrid (SVM + LBP) |
+| **Invariance Strategy** | Explicit dual-eye cyclic roll | Spatial block pooling | Convex regularized margin | Dual-domain spectral + texture fusion |
+| **Occlusion Handling** | Bitwise logical masking | Mask-weighted block histograms | Global energy normalisation | Multi-stage mask weighting |
+| **Classifier** | Exhaustive shift min-Hamming | K-Nearest Neighbors ($k=3$, Cosine) | Linear SVM ($C=0.2$) + Cosine blend | Score-level weighted ensemble ($0.55/0.45$) |
+| **Raw Score Range** | $[0.0, 1.0]$ (Lower is better) | $[0.0, 1.0]$ (Lower is better) | $(-\infty, +\infty)$ (Higher is better) | $[0.0, 1.0]$ (Higher is better) |
+| **Rank-1 Acc (Enroll 5)** | 46.6% | 39.7% | 60.3% | **62.1%** |
+| **Rank-1 Acc (Enroll 10)**| 41.6% | 34.5% | 51.4% | **56.5%** |
+| **Rank-5 Acc (Enroll 10)**| 74.5% | 72.2% | 80.4% | **83.9%** |
+| **Extraction Latency** | ~15.7 ms | **~14.8 ms** | ~62.1 ms | ~58.6 ms |
+| **Matching Latency** | ~36.0 ms (Enroll 1) | **~0.10 ms** | ~0.66 ms | ~0.72 ms |
 
 ---
 
@@ -229,42 +237,48 @@ The system includes three mathematically distinct algorithms inheriting from [`B
 
 ### 1:N Identification Performance (Rank-1 & Rank-5)
 
-Evaluated across 25 benchmark subjects with 240 to 465 disjoint test probe presentations:
+Evaluated across 25 benchmark subjects with 255 to 480 disjoint test probe presentations:
 
 | Method | Enrollment Size ($E$) | Rank-1 Accuracy | Rank-5 Accuracy | Extr. Latency | Match Latency | Usability Rate |
 |:---|:---:|:---:|:---:|:---:|:---:|:---:|
-| **Gabor + SVM** | 1 | 28.8% | 59.4% | 18.9 ms | 0.53 ms | 100.0% |
-| **Gabor + SVM** | 3 | 36.4% | 66.0% | 47.3 ms | 1.39 ms | 100.0% |
-| **Gabor + SVM** | 5 | 39.5% | 68.0% | 20.7 ms | 0.55 ms | 100.0% |
-| **Gabor + SVM** | 10 | **46.7%** | **73.3%** | 102.7 ms | 2.06 ms | 100.0% |
-| **LBP + KNN** | 1 | 37.9% | 73.6% | 9.9 ms | 0.15 ms | 100.0% |
-| **LBP + KNN** | 3 | 38.8% | 76.4% | 10.5 ms | 0.30 ms | 100.0% |
-| **LBP + KNN** | 5 | 37.0% | 72.6% | 35.6 ms | 0.74 ms | 100.0% |
-| **LBP + KNN** | 10 | **43.8%** | **74.2%** | 45.2 ms | 4.57 ms | 100.0% |
-| **Gabor + Hamming** | 1 | 27.5% | 57.0% | 27.8 ms | 29.8 ms | 100.0% |
-| **Gabor + Hamming** | 3 | 28.4% | 53.7% | 28.3 ms | 82.9 ms | 100.0% |
-| **Gabor + Hamming** | 5 | 31.0% | 58.1% | 17.7 ms | 276.1 ms | 100.0% |
-| **Gabor + Hamming** | 10 | **30.4%** | **53.3%** | 20.9 ms | 296.3 ms | 100.0% |
+| **Ensemble Fusion** | 1 | **41.0%** | **63.1%** | 58.6 ms | 0.72 ms | 100.0% |
+| **Ensemble Fusion** | 3 | **57.2%** | **83.3%** | 61.1 ms | 0.79 ms | 100.0% |
+| **Ensemble Fusion** | 5 | **62.1%** | **83.7%** | 64.1 ms | 1.25 ms | 100.0% |
+| **Ensemble Fusion** | 10 | **56.5%** | **83.9%** | 69.2 ms | 1.66 ms | 100.0% |
+| **Gabor + SVM** | 1 | 34.8% | 60.6% | 62.1 ms | 0.66 ms | 100.0% |
+| **Gabor + SVM** | 3 | 53.0% | 81.9% | 53.1 ms | 0.65 ms | 100.0% |
+| **Gabor + SVM** | 5 | 60.3% | 81.6% | 59.3 ms | 0.69 ms | 100.0% |
+| **Gabor + SVM** | 10 | 51.4% | 80.4% | 61.4 ms | 1.09 ms | 100.0% |
+| **Gabor + Hamming** | 1 | 37.9% | 62.1% | 15.7 ms | 36.0 ms | 100.0% |
+| **Gabor + Hamming** | 3 | 45.6% | 75.1% | 19.2 ms | 109.9 ms | 100.0% |
+| **Gabor + Hamming** | 5 | 46.6% | 78.4% | 23.2 ms | 182.8 ms | 100.0% |
+| **Gabor + Hamming** | 10 | 41.6% | 74.5% | 22.1 ms | 365.4 ms | 100.0% |
+| **LBP + KNN** | 1 | 31.5% | 66.5% | 14.8 ms | 0.10 ms | 100.0% |
+| **LBP + KNN** | 3 | 44.6% | 78.1% | 17.8 ms | 0.15 ms | 100.0% |
+| **LBP + KNN** | 5 | 39.7% | 75.0% | 20.5 ms | 0.46 ms | 100.0% |
+| **LBP + KNN** | 10 | 34.5% | 72.2% | 20.9 ms | 0.61 ms | 100.0% |
 
 ---
 
 ### 1:1 Verification Performance (Validation-Derived Thresholds)
 
-Operating points were calibrated on 3,930 genuine and 600 impostor pairs:
+Operating points were calibrated on 4,185 genuine and 600 impostor pairs:
 
 | Method | Val Derived Threshold ($\tau^*$) | Test FAR | Test FRR | Test EER | Genuine Pairs | Impostor Pairs | Score Type |
 |:---|:---:|:---:|:---:|:---:|:---:|:---:|:---|
-| **Gabor + Hamming** | 0.2503 | **9.00%** | **72.29%** | **41.30%** | 3,930 | 600 | Masked Hamming Distance |
-| **LBP + KNN** | 0.3152 | **7.17%** | **73.94%** | **37.16%** | 3,930 | 600 | Euclidean Distance |
-| **Gabor + SVM** | 0.9704 | **11.67%** | **63.94%** | **37.67%** | 3,930 | 600 | Signed SVM Margin |
+| **LBP + KNN** | 0.2138 | **21.67%** | **43.08%** | **31.57%** | 4,185 | 600 | Cosine Distance |
+| **Ensemble Fusion** | 0.8680 | **40.83%** | **30.16%** | **34.66%** | 4,185 | 600 | Fused Confidence Score |
+| **Gabor + Hamming** | 0.2992 | **38.00%** | **35.87%** | **36.93%** | 4,185 | 600 | Masked Hamming Distance |
+| **Gabor + SVM** | 0.9123 | **49.00%** | **32.71%** | **38.67%** | 4,185 | 600 | Calibrated Cosine / SVM Score |
 
 ---
 
 ### Computational Latency & Efficiency Analysis
 
-- **Feature Extraction Speed:** **`LBP + KNN`** is the fastest pipeline (~9.9 ms), making it suitable for edge and mobile environments.
-- **Matching Speed:** **`LBP + KNN`** achieves sub-millisecond matching (0.15 ms - 0.30 ms), while `Gabor + Hamming` requires ~296 ms per probe due to evaluating $5 \times 5 = 25$ independent rotation combinations per candidate.
-- **Top Accuracy:** **`Gabor + SVM`** achieves the highest Rank-1 identification accuracy (**46.7%** at $E=10$), while **`LBP + KNN`** provides the strongest Rank-5 retrieval (**74.2%** to **76.4%**).
+- **Feature Extraction Speed:** **`LBP + KNN`** and **`Gabor + Hamming`** are the fastest pipelines (~14.8 ms and ~15.7 ms), making them ideal for high-throughput edge systems.
+- **Matching Speed:** **`LBP + KNN`** delivers ultra-fast sub-millisecond matching (**0.10 ms - 0.61 ms**), while `Ensemble Fusion` and `Gabor + SVM` execute in **0.65 ms - 1.66 ms**. `Gabor + Hamming` requires up to ~365 ms per probe at $E=10$ due to evaluating $5 \times 5 = 25$ independent rotation combinations per template candidate.
+- **Top Accuracy:** **`Ensemble Fusion`** achieves the highest overall accuracy (**62.1% Rank-1** at $E=5$, **83.9% Rank-5** at $E=10$), closely followed by **`Gabor + SVM`** (**60.3% Rank-1** at $E=5$).
+- **Verification Accuracy:** **`LBP + KNN`** achieves the best verification Equal Error Rate (**31.57% EER**), with **`Ensemble Fusion`** ranking second at **34.66% EER**.
 
 Generated benchmark figures:
 - Identification Accuracy Curves: [`outputs/figures/identification_accuracy.png`](outputs/figures/identification_accuracy.png)
