@@ -1,0 +1,161 @@
+================================================================================
+MERMAID DIAGRAM 1: FLOW OF DESIGN (END-TO-END BIOMETRIC PROCESSING PIPELINE)
+================================================================================
+Copy the block below into Google Flow / Mermaid Live Editor / Draw.io:
+
+flowchart TD
+    subgraph S1 ["1. Input Acquisition & Ingestion"]
+        A["Probe Input Image (JPEG/PNG/BGR)"] --> B["OS Artifact Filtering (.DS_Store, Thumbs.db)"]
+        B --> C["Label Parsing & Metadata Extraction<br/>(Subject ID, Session, Image Index)"]
+    end
+
+    subgraph S2 ["2. Biometric Quality Assessment"]
+        C --> D["Sharpness Evaluation (Laplacian Variance: Var >= 8.0)"]
+        D --> E["Contrast Evaluation (Std Dev: sigma >= 10.0)"]
+        E --> F["Illumination Check (Mean: 15.0 to 240.0, Clipping < 40%)"]
+        F --> G{"Quality Check Passed?"}
+        G -- No --> G_Fail["Flag Quality Warning / Reject Probe"]
+        G -- Yes --> H{"Is Segmentation Mask Provided?"}
+    end
+
+    subgraph S3 ["3. Dual-Eye Iris Segmentation"]
+        H -- Yes (Mask available) --> I1["Ground Truth Mask Segmentation<br/>(Extract class 85: Iris region)"]
+        H -- No (Raw upload) --> I2["Automated Ocular Segmentation<br/>(Aspect ratio split, Adaptive threshold, Circularity/Hough)"]
+        I1 --> J["Connected Component Analysis & Noise Rejection (Area >= 80px)"]
+        I2 --> J
+        J --> K["Isolate Left Eye (Right of person) & Right Eye (Left of person)"]
+        K --> L["Extract Square Centroid Patches (Reflection Border Padding)"]
+    end
+
+    subgraph S4 ["4. Daugman Polar Normalization"]
+        L --> M["Unwrap Annular Patches (cv2.warpPolar: 64 radial x 256 angular)"]
+        M --> N["Contrast Equalization (CLAHE: clipLimit=2.5, tileGrid=(8,8))"]
+        N --> O["Occlusion Mask Mapping (cv2.INTER_NEAREST: 64 x 256)"]
+        O --> P["Horizontal Dual-Eye Concatenation<br/>(Unified 64 x 512 Iris Strip & Mask)"]
+    end
+
+    subgraph S5 ["5. Feature Extraction Pipelines"]
+        P --> Q1["Method 1: Gabor Wavelet Bank<br/>4 Orientations x 2 Scales (8 Filters)<br/>Block Averaging (8x32) & Phase Quantization<br/>--> 1024-bit Binary Iris Code"]
+        P --> Q2["Method 2: Spatial Block LBP<br/>Circular 8-Neighbor LBP (R=1, P=8)<br/>4x16 Spatial Grid (64 Blocks x 32 Bins)<br/>--> 2048-dim L2-Normalized Histogram"]
+        P --> Q3["Method 3: Gabor Energy Statistics<br/>8 Gabor Magnitude Envelopes<br/>2x8 Spatial Blocks (Mean + Std Dev)<br/>--> 256-dim Continuous Dense Vector"]
+    end
+
+    subgraph S6 ["6. Matching Engine & Classification"]
+        Q1 --> R1["Masked Hamming Distance Matching<br/>Independent Dual-Eye Rotation Roll (s in [-2, 2])<br/>Score: HD in [0, 1] (Lower is better)"]
+        Q2 --> R2["Nearest Neighbor Metric Search<br/>Euclidean Distance (k=3 / 1-NN)<br/>Score: Dist in [0, sqrt(2)] (Lower is better)"]
+        Q3 --> R3["StandardScaler Normalization<br/>Linear Support Vector Machine (LinearSVC)<br/>Score: Signed Margin (Higher is better)"]
+    end
+
+    subgraph S7 ["7. Biometric Decision Layer"]
+        R1 & R2 & R3 --> S{"Operational Mode"}
+        S -- 1:N Identification --> T1["Closed-Set Candidate Ranking<br/>Sort by score, return Top-K identities<br/>Compute normalized similarity score [0, 1]"]
+        S -- 1:1 Verification --> T2["Claimed Identity Verification<br/>Compare score with Validation-Derived EER Threshold<br/>Output: MATCH or NO_MATCH"]
+    end
+
+    subgraph S8 ["8. Consumer & Delivery Layer"]
+        T1 & T2 --> U["Flask REST API v1 (JSON Response)"]
+        U --> V["Interactive Browser UI (Live Biometrics)"]
+        U -.-> W["Spring Boot Enterprise Gateway (Future)"]
+        W -.-> X["Android Mobile Client (CameraX / Retrofit)"]
+    end
+
+
+================================================================================
+MERMAID DIAGRAM 2: SYSTEM ARCHITECTURE (MODULAR TIERED ARCHITECTURE)
+================================================================================
+Copy the block below into Google Flow / Mermaid Live Editor / Draw.io:
+
+flowchart TB
+    subgraph PresentationLayer ["Presentation Layer"]
+        UI["Web Browser Client<br/>(HTML5 / CSS3 / Vanilla JS / Bootstrap)"]
+        ExtClient["External API Consumers<br/>(cURL / Postman / Mobile Apps)"]
+    end
+
+    subgraph ControllerLayer ["REST Controller Layer (Flask)"]
+        Endpoints["Flask Application (app.py)<br/>- GET /api/v1/health<br/>- GET /api/v1/dataset/summary<br/>- GET /api/v1/results/latest<br/>- POST /api/v1/identify<br/>- POST /api/v1/verify"]
+        Validation["Request Validation & UUID Tracking<br/>Error Handlers (400, 404, 413, 500)"]
+        Endpoints --- Validation
+    end
+
+    subgraph ServiceLayer ["Service Orchestration Layer (Decoupled Core)"]
+        Service["RecognitionService (src/services/recognition_service.py)<br/>- Memory Model Pre-warming & Caching<br/>- Identification & Verification Dispatcher<br/>- Zero Flask Dependency (Pure Python / NumPy)"]
+    end
+
+    subgraph PreprocessingLayer ["Preprocessing & Normalization Layer"]
+        IO["Image IO (image_io.py)<br/>- Byte stream decoding<br/>- Memory buffer validation"]
+        Quality["Quality Assessment (quality.py)<br/>- Laplacian blur check<br/>- Contrast & illumination"]
+        Seg["Iris Segmentation (iris_region.py)<br/>- Ground-truth mask extraction<br/>- Automated ocular detector"]
+        Norm["Daugman Normalization (normalization.py)<br/>- cv2.warpPolar unwrapping<br/>- CLAHE equalization<br/>- Dual-eye strip concatenation (64x512)"]
+    end
+
+    subgraph BiometricMethods ["Biometric Core Algorithm Layer"]
+        Base["BaseIrisMethod (base.py)<br/>Abstract interface: fit(), extract_features(), predict_ranked(), verify()"]
+        M1["GaborHammingMethod (gabor_hamming.py)<br/>- 2D Gabor filter bank<br/>- 1024-bit binary IrisCode<br/>- Masked Hamming distance<br/>- Dual-eye rotation search"]
+        M2["LbpKnnMethod (lbp_knn.py)<br/>- Circular LBP (P=8, R=1)<br/>- 64 spatial blocks x 32 bins<br/>- 2048-dim L2 descriptor<br/>- Nearest Neighbor search"]
+        M3["GaborSvmMethod (gabor_svm.py)<br/>- Gabor magnitude envelopes<br/>- 256-dim energy stats (mean, std)<br/>- StandardScaler scaling<br/>- LinearSVC hyperplane margin"]
+        Base --> M1
+        Base --> M2
+        Base --> M3
+    end
+
+    subgraph EvaluationEngine ["Evaluation & Benchmarking Engine"]
+        Inventory["Dataset Inventory (inventory.py)<br/>- UBIPr both_eyes audit<br/>- Pairwise file verification"]
+        Protocols["Leakage-Safe Protocols (protocols.py)<br/>- Disjoint S1 Gallery & S2 Probes<br/>- Validation threshold calibration"]
+        Metrics["Biometric Metrics (metrics.py)<br/>- Rank-1 & Rank-5 Accuracy<br/>- FAR, FRR, EER calculations<br/>- Latency measurement"]
+    end
+
+    subgraph StorageLayer ["Data & Artifact Storage"]
+        Dataset[("UBIPr Both-Eyes Dataset<br/>(data/ubipr2/both_eyes)")]
+        Outputs[("Reports & Figures<br/>(outputs/results, reports/)")]
+        Models[("Serialized Artifacts<br/>(artifacts/models/)")]
+    end
+
+    PresentationLayer --> ControllerLayer
+    ControllerLayer --> ServiceLayer
+    ServiceLayer --> PreprocessingLayer
+    PreprocessingLayer --> BiometricMethods
+    EvaluationEngine --> BiometricMethods
+    EvaluationEngine --> StorageLayer
+    PreprocessingLayer --> StorageLayer
+
+
+================================================================================
+MERMAID DIAGRAM 3: RUNTIME EXECUTION SEQUENCE (IDENTIFICATION & VERIFICATION)
+================================================================================
+Copy the block below into Google Flow / Mermaid Live Editor / Draw.io:
+
+sequenceDiagram
+    autonumber
+    actor Client as Client (Browser / Mobile / cURL)
+    participant API as Flask API (app.py)
+    participant Service as RecognitionService
+    participant Quality as Quality Assessment
+    participant Seg as Iris Segmentation
+    participant Norm as Daugman Normalization
+    participant Engine as Biometric Methods (Gabor/LBP/SVM)
+
+    Client->>API: POST /api/v1/identify or /verify (image, mask, method)
+    API->>API: Validate payload, check MIME type, assign UUID request_id
+    API->>Service: identify() or verify()
+    Service->>Quality: assess_image_quality(img)
+    Quality-->>Service: ImageQualityReport(sharpness, contrast, brightness, is_usable)
+    Service->>Seg: segment_iris(img, mask)
+    alt GT Mask provided
+        Seg->>Seg: segment_iris_from_mask() (Connected Components, class 85)
+    else Raw image without mask
+        Seg->>Seg: segment_iris_automated() (Aspect ratio, adaptive threshold, Hough)
+    end
+    Seg-->>Service: SegmentationResult(regions=[left_eye, right_eye])
+    Service->>Norm: normalize_iris_regions(regions)
+    Norm->>Norm: cv2.warpPolar (64x256) + CLAHE + Mask Warping
+    Norm-->>Service: NormalizedIris (64x512 combined strip)
+    
+    loop For each requested method
+        Service->>Engine: extract_features(NormalizedIris)
+        Engine-->>Service: Feature descriptor (Bitcode / LBP vector / Gabor vector)
+        Service->>Engine: predict_ranked(probe_feature) / verify()
+        Engine-->>Service: Raw score, normalized similarity, match decision
+    end
+
+    Service-->>API: Composite result dictionary
+    API-->>Client: HTTP 200 JSON Response (Quality, Segmentation, Candidates)

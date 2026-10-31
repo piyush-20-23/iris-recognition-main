@@ -1,0 +1,55 @@
+flowchart TD
+    subgraph S1 ["1. Input Acquisition & Ingestion"]
+        A["Probe Input Image (JPEG/PNG/BGR)"] --> B["OS Artifact Filtering (.DS_Store, Thumbs.db)"]
+        B --> C["Label Parsing & Metadata Extraction<br/>(Subject ID, Session, Image Index)"]
+    end
+
+    subgraph S2 ["2. Biometric Quality Assessment"]
+        C --> D["Sharpness Evaluation (Laplacian Variance: Var >= 8.0)"]
+        D --> E["Contrast Evaluation (Std Dev: sigma >= 10.0)"]
+        E --> F["Illumination Check (Mean: 15.0 to 240.0, Clipping < 40%)"]
+        F --> G{"Quality Check Passed?"}
+        G -- No --> G_Fail["Flag Quality Warning / Reject Probe"]
+        G -- Yes --> H{"Is Segmentation Mask Provided?"}
+    end
+
+    subgraph S3 ["3. Dual-Eye Iris Segmentation"]
+        H -- Yes (Mask available) --> I1["Ground Truth Mask Segmentation<br/>(Extract class 85: Iris region)"]
+        H -- No (Raw upload) --> I2["Automated Ocular Segmentation<br/>(Aspect ratio split, Adaptive threshold, Circularity/Hough)"]
+        I1 --> J["Connected Component Analysis & Noise Rejection (Area >= 80px)"]
+        I2 --> J
+        J --> K["Isolate Left Eye (Right of person) & Right Eye (Left of person)"]
+        K --> L["Extract Square Centroid Patches (Reflection Border Padding)"]
+    end
+
+    subgraph S4 ["4. Daugman Polar Normalization"]
+        L --> M["Unwrap Annular Patches (cv2.warpPolar: 64 radial x 256 angular)"]
+        M --> N["Contrast Equalization (CLAHE: clipLimit=2.5, tileGrid=(8,8))"]
+        N --> O["Occlusion Mask Mapping (cv2.INTER_NEAREST: 64 x 256)"]
+        O --> P["Horizontal Dual-Eye Concatenation<br/>(Unified 64 x 512 Iris Strip & Mask)"]
+    end
+
+    subgraph S5 ["5. Feature Extraction Pipelines"]
+        P --> Q1["Method 1: Gabor Wavelet Bank<br/>4 Orientations x 2 Scales (8 Filters)<br/>Block Averaging (8x32) & Phase Quantization<br/>--> 1024-bit Binary Iris Code"]
+        P --> Q2["Method 2: Spatial Block LBP<br/>Circular 8-Neighbor LBP (R=1, P=8)<br/>4x16 Spatial Grid (64 Blocks x 32 Bins)<br/>--> 2048-dim L2-Normalized Histogram"]
+        P --> Q3["Method 3: Gabor Energy Statistics<br/>8 Gabor Magnitude Envelopes<br/>2x8 Spatial Blocks (Mean + Std Dev)<br/>--> 256-dim Continuous Dense Vector"]
+    end
+
+    subgraph S6 ["6. Matching Engine & Classification"]
+        Q1 --> R1["Masked Hamming Distance Matching<br/>Independent Dual-Eye Rotation Roll (s in [-2, 2])<br/>Score: HD in [0, 1] (Lower is better)"]
+        Q2 --> R2["Nearest Neighbor Metric Search<br/>Euclidean Distance (k=3 / 1-NN)<br/>Score: Dist in [0, sqrt(2)] (Lower is better)"]
+        Q3 --> R3["StandardScaler Normalization<br/>Linear Support Vector Machine (LinearSVC)<br/>Score: Signed Margin (Higher is better)"]
+    end
+
+    subgraph S7 ["7. Biometric Decision Layer"]
+        R1 & R2 & R3 --> S{"Operational Mode"}
+        S -- 1:N Identification --> T1["Closed-Set Candidate Ranking<br/>Sort by score, return Top-K identities<br/>Compute normalized similarity score [0, 1]"]
+        S -- 1:1 Verification --> T2["Claimed Identity Verification<br/>Compare score with Validation-Derived EER Threshold<br/>Output: MATCH or NO_MATCH"]
+    end
+
+    subgraph S8 ["8. Consumer & Delivery Layer"]
+        T1 & T2 --> U["Flask REST API v1 (JSON Response)"]
+        U --> V["Interactive Browser UI (Live Biometrics)"]
+        U -.-> W["Spring Boot Enterprise Gateway (Future)"]
+        W -.-> X["Android Mobile Client (CameraX / Retrofit)"]
+    end
